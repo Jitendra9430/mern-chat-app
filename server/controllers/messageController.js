@@ -1,39 +1,45 @@
-const Message = require("../models/messageModel");
-const Chat = require("../models/Chat");
+import Message from "../models/messageModel.js";
+import Chat from "../models/chatModel.js";
 
-//SEND MESSAGE
-exports.sendMessage = async (req, res) => {
-    const {content, chatId} = req.body;
+// SEND MESSAGE
+export const sendMessage = async (req, res) => {
+  const { content, chatId } = req.body;
 
-    try {
-        let message = await Message.create({
-            sender: req.user._id,
-            content,
-            chat: chatId,
-        });
+  try {
+    let message = await Message.create({
+      sender: req.user._id,
+      content,
+      chat: chatId,
+    });
 
-        message = await message.populate("sender", "name email");
-        message = await message.populate("chat");
+    message = await message.populate("sender", "name email");
 
-        await Chat.findByIdAndUpdate(chatId, {
-            lastMesssage: message._id,
-        });
+    message = await message.populate({
+      path: "chat",
+      populate: {
+        path: "users",
+        select: "name email",
+      },
+    });
 
-        res.status(201).json(message);
-    } catch (error) {
-        res.status(500).json({message: error.message});
-    }
+    await Chat.findByIdAndUpdate(chatId, {
+      lastMessage: message._id,
+    });
+
+    res.status(201).json(message);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
 };
 
-//GET MESSAGES
-exports.getMessages = async (req, res) => {
-    try {
-        const messages = await Message.find({chat: req.params.chatId})
-        .populate("sender", "name email")
+// GET MESSAGES
+export const getMessages = async (req, res) => {
+  try {
+    const messages = await Message.find({ chat: req.params.chatId })
+      .populate("sender", "name email");
 
-        res.json(messages);
-    } catch (error) {
-        res.status(500).json({message: error.message});
-
-    }
-}
+    res.json(messages);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
