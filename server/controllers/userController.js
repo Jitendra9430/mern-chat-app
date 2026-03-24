@@ -23,3 +23,23 @@ export const getUsers = async (req, res) => {
     res.status(500).json({ message: "Server Error" });
   }
 };
+
+export const loginUser = async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    // TEMP: simple mock login (for testing)
+    if (email && password) {
+      return res.json({
+        _id: "123",
+        name: "Test User",
+        email,
+        token: "abc123",
+      });
+    }
+
+    res.status(400).json({ message: "Invalid data" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
