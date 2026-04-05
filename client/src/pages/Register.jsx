@@ -1,50 +1,56 @@
 import { useState } from "react";
 import API from "../services/api";
-import { useNavigate } from "react-router-dom";
+import {useNavigate} from "react-router-dom";
 
-const Login = () => {
+const Register = () => {
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-
   const navigate = useNavigate();
 
-  const handleLogin = async () => {
-    if (!email || !password) {
-      return alert("Please enter email and password");
-    }
-
+  const handleRegister = async () => {
+    console.log("Sending data:", {
+      name,
+      email,
+      password,
+    });
     try {
-      setLoading(true);
-
-      const { data } = await API.post("/auth/login", {
+      const { data } = await API.post("/auth/register", {
+        name,
         email,
         password,
       });
-
-      // ✅ Save full response (token + user)
+      console.log("Full backend response:", data);
+       //Auto login after registration
       localStorage.setItem("user", JSON.stringify(data));
-
-      console.log("SAVED:", data);
-
+      console.log("User Saved:", data);
       navigate("/");
+      alert("Registered Successfully!");
+
     } catch (error) {
-      console.log("ERROR:", error.response?.data || error.message);
-
-      alert(
-        error.response?.data?.message || "Login failed. Check credentials"
-      );
-    } finally {
-      setLoading(false);
+        console.log("Full error:", error);
+        if(error.response) {
+            alert(error.response.data.message);
+        } else {
+            alert("Something went wrong.");
+        }
     }
-  };
 
+}
   return (
   <div className="flex items-center justify-center h-screen bg-[#111b21]">
     <div className="bg-[#202c33] p-8 rounded-xl shadow-lg w-96 text-white">
       <h2 className="text-2xl font-semibold mb-6 text-center text-green-400">
-        Login
+        Create Account
       </h2>
+
+      <input
+        type="text"
+        placeholder="Name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        className="w-full p-3 mb-4 bg-[#2a3942] rounded outline-none"
+      />
 
       <input
         type="email"
@@ -63,20 +69,19 @@ const Login = () => {
       />
 
       <button
-        onClick={handleLogin}
-        disabled={loading}
+        onClick={handleRegister}
         className="w-full bg-green-500 hover:bg-green-600 p-3 rounded font-semibold"
       >
-        {loading ? "Logging in..." : "Login"}
+        Register
       </button>
 
       <p className="text-sm mt-4 text-center text-gray-400">
-        New user?{" "}
+        Already have an account?{" "}
         <span
-          onClick={() => navigate("/register")}
+          onClick={() => navigate("/login")}
           className="text-green-400 cursor-pointer"
         >
-          Register
+          Login
         </span>
       </p>
     </div>
@@ -84,4 +89,4 @@ const Login = () => {
 );
 };
 
-export default Login;
+export default Register;

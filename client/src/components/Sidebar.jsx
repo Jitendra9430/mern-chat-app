@@ -1,17 +1,25 @@
-const Sidebar = ({ users, accessChat }) => {
+const Sidebar = ({ users, accessChat, onlineUsers }) => {
   return (
-    <div style={{ width: "30%", borderRight: "1px solid gray" }}>
-      <h3>Users</h3>
+    <div className="w-1/4 bg-gray-200 p-4 overflow-y-auto">
+      <h2 className="font-bold mb-4">Chats</h2>
 
-      {users.map((u) => (
-        <div
-          key={u._id}
-          onClick={() => accessChat(u._id)}
-          style={{ cursor: "pointer", padding: "10px" }}
-        >
-          {u.name}
-        </div>
-      ))}
+      {users.map((u) => {
+        const isOnline = onlineUsers?.includes(u._id);
+
+        return (
+          <div
+            key={u._id}
+            onClick={() => accessChat(u._id)}
+            className="p-2 mb-2 bg-white rounded cursor-pointer hover:bg-gray-100 flex justify-between items-center"
+          >
+            <span>{u.name}</span>
+
+            {isOnline && (
+              <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 };
