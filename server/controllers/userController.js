@@ -1,10 +1,20 @@
- import User from "../models/userModel.js";
+import User from "../models/userModel.js";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 
-// @desc    Get all users (except logged-in user)
-// @route   GET /api/users
-// @access  Protected
+// 🔑 Generate Token
+const generateToken = (id) => {
+  return jwt.sign({ id }, process.env.JWT_SECRET, {
+    expiresIn: "30d",
+  });
+};
+
+// ================= GET USERS =================
+
 export const getUsers = async (req, res) => {
   try {
+    console.log("REQ.USER:", req.user); // debug
+
     const keyword = req.query.search
       ? {
           $or: [
@@ -14,32 +24,39 @@ export const getUsers = async (req, res) => {
         }
       : {};
 
-    const users = await User.find(keyword).find({
+    const users = await User.find({
+      ...keyword,
       _id: { $ne: req.user._id },
     });
 
     res.status(200).json(users);
   } catch (error) {
+    console.error("GET USERS ERROR:", error.message);
     res.status(500).json({ message: "Server Error" });
   }
 };
+
+// ================= LOGIN USER =================
 
 export const loginUser = async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    // TEMP: simple mock login (for testing)
-    if (email && password) {
-      return res.json({
-        _id: "123",
-        name: "Test User",
-        email,
-        token: "abc123",
-      });
-    }
+    // 🔍 Find user in DB
+    const user = await User.findOne({ email });
 
-    res.status(400).json({ message: "Invalid data" });
+    if (user && (await bcrypt.compare(password, user.password))) {
+      res.json({
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        token: generateToken(user._id), // ✅ REAL TOKEN
+      });
+    } else {
+      res.status(401).json({ message: "Invalid email or password" });
+    }
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error("LOGIN ERROR:", error.message);
+    res.status(500).json({ message: "Server Error" });
   }
 };

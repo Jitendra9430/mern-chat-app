@@ -10,6 +10,7 @@ export const sendMessage = async (req, res) => {
       sender: req.user._id,
       content,
       chat: chatId,
+      status: "sent",
     });
 
     message = await message.populate("sender", "name email");
