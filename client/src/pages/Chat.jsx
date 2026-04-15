@@ -9,6 +9,7 @@ const ENDPOINT = "http://localhost:5000";
 const Chat = () => {
   const socketRef = useRef(null);
   const navigate = useNavigate();
+  const messagesEndRef = useRef(null);
 
   const [users, setUsers] = useState([]);
   const [selectedChat, setSelectedChat] = useState(null);
@@ -16,217 +17,245 @@ const Chat = () => {
   const [input, setInput] = useState("");
   const [user, setUser] = useState(null);
   const [onlineUsers, setOnlineUsers] = useState([]);
-  const [typingUsers, setTypingUsers] = useState(false);
 
-  // ✅ Load user
+  // ================= LOAD USER =================
   useEffect(() => {
-  const storedUser = JSON.parse(localStorage.getItem("user")); // ✅ FIXED
+    const storedUser = JSON.parse(localStorage.getItem("user"));
+    if (!storedUser) navigate("/login");
+    else setUser(storedUser);
+  }, [navigate]);
 
-  console.log("Stored user:", storedUser);
-
-  if (!storedUser) {
-    navigate("/login");
-  } else {
-    setUser(storedUser);
-  }
-}, [navigate]);
-
-  // ✅ DEFINE actualUser BEFORE USING
   const actualUser = user?.user || user;
 
-  // ✅ Socket setup
+  // ================= SOCKET SETUP =================
   useEffect(() => {
     if (!actualUser) return;
 
     socketRef.current = io(ENDPOINT);
-    const socket = socketRef.current;
+    socketRef.current.emit("setup", actualUser._id);
 
-    socket.emit("setup", actualUser._id); // ✅ FIXED
-
-    socket.on("online users", setOnlineUsers);
-    socket.on("typing", () => setTypingUsers(true));
-    socket.on("stop typing", () => setTypingUsers(false));
-
-    socket.on("message received", (newMessage) => {
-      if (!selectedChat || selectedChat._id !== newMessage.chat._id) return;
-
-      setMessages((prev) => [
-        ...prev,
-        { ...newMessage, status: newMessage.status || "sent" },
-      ]);
+    socketRef.current.on("connected", () => {
+      console.log("✅ Socket connected");
     });
 
-    socket.on("message delivered", (messageId) => {
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg._id === messageId ? { ...msg, status: "delivered" } : msg
-        )
-      );
+    socketRef.current.on("online users", (users) => {
+      setOnlineUsers(users);
     });
 
-    socket.on("message seen", () => {
-      setMessages((prev) =>
-        prev.map((msg) => ({
-          ...msg,
-          status: "seen",
-        }))
-      );
-    });
+    return () => {
+      socketRef.current?.disconnect();
+    };
+  }, [actualUser]);
 
-    return () => socket.disconnect();
-  }, [actualUser, selectedChat]);
-
-  // ✅ Fetch users
+  // ================= JOIN CHAT + RECEIVE =================
   useEffect(() => {
-  if (!user) return;
+    if (!selectedChat || !socketRef.current) return;
 
-  const storedUser = JSON.parse(localStorage.getItem("user"));
+    socketRef.current.emit("join chat", selectedChat._id);
+    socketRef.current.off("message received");
 
-  API.get("/users", {
-    headers: {
-      Authorization: `Bearer ${storedUser.token}`,
-    },
-  }).then((res) => setUsers(res.data));
-}, [user]);
+    socketRef.current.on("message received", (newMessage) => {
+      console.log("📩 RECEIVED:", newMessage);
 
-  // ✅ Access chat
+      const incomingChatId =
+        typeof newMessage.chat === "object"
+          ? newMessage.chat._id
+          : newMessage.chat;
+
+      // Use functional state read to get latest selectedChat._id
+      setMessages((prev) => {
+        // Guard: ignore if message belongs to a different chat
+        if (incomingChatId !== selectedChat._id) return prev;
+        // Guard: ignore duplicates
+        if (prev.find((m) => m._id === newMessage._id)) return prev;
+        return [...prev, newMessage];
+      });
+    });
+
+    return () => {
+      socketRef.current?.off("message received");
+    };
+  }, [selectedChat]);
+
+  // ================= AUTO SCROLL =================
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  // ================= FETCH USERS =================
+  useEffect(() => {
+    if (!user) return;
+
+    const storedUser = JSON.parse(localStorage.getItem("user"));
+    const myId = storedUser.user?._id || storedUser._id;
+
+    API.get("/users", {
+      headers: { Authorization: `Bearer ${storedUser.token}` },
+    }).then((res) => {
+      setUsers(res.data.filter((u) => u._id !== myId));
+    });
+  }, [user]);
+
+  // ================= ACCESS CHAT =================
   const accessChat = async (userId) => {
-    const { data } = await API.post("/chat", { userId });
-    setSelectedChat(data);
-    setMessages([]);
+    if (!userId) return;
+
+    // ✅ REMOVED the early-return guard that blocked reopening chats.
+    // The backend /chat route must handle finding existing chats.
+
+    const storedUser = JSON.parse(localStorage.getItem("user"));
+
+    try {
+      const { data } = await API.post(
+        "/chat",
+        { userId },
+        {
+          headers: {
+            Authorization: `Bearer ${storedUser.token}`,
+          },
+        }
+      );
+
+      console.log("✅ CHAT OPENED:", data._id);
+
+      setSelectedChat(data);
+      setMessages([]);
+    } catch (error) {
+      console.log(
+        "❌ ACCESS CHAT ERROR:",
+        error.response?.data || error.message
+      );
+    }
   };
 
-  // ✅ Fetch messages
+  // ================= FETCH MESSAGES =================
   useEffect(() => {
     if (!selectedChat) return;
 
-    API.get(`/message/${selectedChat._id}`).then((res) => {
-      setMessages(
-        res.data.map((msg) => ({
-          ...msg,
-          status: msg.status || "sent",
-        }))
-      );
+    const storedUser = JSON.parse(localStorage.getItem("user"));
 
-      socketRef.current.emit("join chat", selectedChat._id);
+    API.get(`/message/${selectedChat._id}`, {
+      headers: { Authorization: `Bearer ${storedUser.token}` },
+    }).then((res) => {
+      setMessages(res.data);
     });
   }, [selectedChat]);
 
-  // ✅ Send message
+  // ================= SEND MESSAGE =================
   const sendMessage = async () => {
     if (!input.trim() || !selectedChat) return;
 
-    const { data } = await API.post("/message", {
-      content: input,
-      chatId: selectedChat._id,
-    });
+    const storedUser = JSON.parse(localStorage.getItem("user"));
+    const messageContent = input;
+    setInput(""); // Clear input immediately for better UX
 
-    socketRef.current.emit("new message", data);
+    try {
+      const { data } = await API.post(
+        "/message",
+        {
+          content: messageContent,
+          chatId: selectedChat._id,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${storedUser.token}`,
+          },
+        }
+      );
 
-    setMessages((prev) => [...prev, data]);
-    setInput("");
+      console.log("📤 SENT:", data);
+
+      socketRef.current.emit("new message", data);
+
+      // ✅ Add to local messages so sender sees it immediately
+      setMessages((prev) => {
+        if (prev.find((m) => m._id === data._id)) return prev;
+        return [...prev, data];
+      });
+    } catch (err) {
+      console.log("❌ SEND ERROR:", err.message);
+      setInput(messageContent); // Restore input on error
+    }
   };
 
-  // ✅ Get sender name
-  const getSenderName = (chat) => {
-    return chat.users.find((u) => u._id !== actualUser._id)?.name;
-  };
-
-  // ✅ Loading check
+  // ================= UI =================
   if (!actualUser) return <div>Loading...</div>;
 
   return (
     <div className="flex h-screen">
-      {/* Sidebar */}
       <Sidebar
         users={users}
         accessChat={accessChat}
         onlineUsers={onlineUsers}
+        currentUserId={actualUser._id}
       />
 
-      {/* Chat Area */}
       <div className="flex-1 flex flex-col bg-gray-100">
         {selectedChat ? (
           <>
-            {/* Header */}
-            <div className="p-4 bg-gray-300">
-              <div className="font-bold">{getSenderName(selectedChat)}</div>
-              <div className="text-sm text-gray-600">
-                {typingUsers && "Typing..."}
-              </div>
+            {/* Chat Header */}
+            <div className="p-4 bg-gray-300 font-bold">
+              {selectedChat.users.find((u) => u._id !== actualUser._id)?.name}
             </div>
 
             {/* Messages */}
             <div className="flex-1 overflow-y-auto p-4">
-              {messages.map((msg) => {
-                const senderId =
-                  typeof msg.sender === "object"
-                    ? msg.sender._id
-                    : msg.sender;
+              {messages.length === 0 ? (
+                <div className="text-center text-gray-400 mt-10">
+                  No messages yet. Say hi! 👋
+                </div>
+              ) : (
+                messages.map((msg) => {
+                  const senderId =
+                    typeof msg.sender === "object"
+                      ? msg.sender._id
+                      : msg.sender;
 
-                const isMe = senderId === actualUser._id;
+                  const isMe =
+                    senderId?.toString() === actualUser._id?.toString();
 
-                return (
-                  <div
-                    key={msg._id}
-                    className={`mb-2 flex ${
-                      isMe ? "justify-end" : "justify-start"
-                    }`}
-                  >
+                  return (
                     <div
-                      className={`p-2 rounded-lg max-w-xs ${
-                        isMe
-                          ? "bg-green-400 text-white"
-                          : "bg-gray-200"
+                      key={msg._id}
+                      className={`mb-2 flex ${
+                        isMe ? "justify-end" : "justify-start"
                       }`}
                     >
-                      <div>{msg.content}</div>
-
-                      <div className="text-xs text-right mt-1">
-                        {new Date(msg.createdAt).toLocaleTimeString([], {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
+                      <div
+                        className={`p-2 rounded-lg max-w-xs break-words ${
+                          isMe ? "bg-green-400 text-white" : "bg-white"
+                        }`}
+                      >
+                        {msg.content}
                       </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
+              {/* Auto-scroll anchor */}
+              <div ref={messagesEndRef} />
             </div>
 
             {/* Input */}
-            <div className="p-4 flex">
+            <div className="p-4 flex bg-white border-t">
               <input
                 className="flex-1 border p-2 rounded"
                 value={input}
-                onChange={(e) => {
-                  setInput(e.target.value);
-
-                  socketRef.current.emit("typing", selectedChat._id);
-
-                  setTimeout(() => {
-                    socketRef.current.emit(
-                      "stop typing",
-                      selectedChat._id
-                    );
-                  }, 1000);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") sendMessage();
-                }}
+                placeholder="Type a message..."
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && sendMessage()}
               />
-
               <button
                 onClick={sendMessage}
-                className="ml-2 bg-blue-500 text-white px-4 rounded"
+                className="ml-2 bg-blue-500 text-white px-4 rounded hover:bg-blue-600 transition"
               >
                 Send
               </button>
             </div>
           </>
         ) : (
-          <div className="flex items-center justify-center h-full">
-            Select a chat
+          <div className="flex items-center justify-center h-full text-gray-400">
+            Select a chat to start messaging
           </div>
         )}
       </div>

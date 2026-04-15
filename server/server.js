@@ -6,7 +6,7 @@ import connectDB from "./config/db.js";
 import http from "http";
 import { Server } from "socket.io";
 
-// ✅ Routes
+// Routes
 import authRoutes from "./routes/authRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
 import chatRoutes from "./routes/chatRoutes.js";
@@ -16,18 +16,18 @@ import Message from "./models/messageModel.js";
 
 dotenv.config();
 
-// ✅ Connect DB
+// Connect DB
 connectDB();
 
 const app = express();
 
-// ✅ Middlewares
+// Middlewares
 app.use(cors());
 app.use(express.json());
 
-// ✅ Health check
+// Health check
 app.get("/", (req, res) => {
-  res.send("✅ Chat App Backend Running...");
+  res.send("Chat App Backend Running...");
 });
 
 // ================= ROUTES =================
@@ -38,7 +38,7 @@ app.use("/api/message", messageRoutes);
 
 // ================= ERRORS =================
 app.use((req, res) => {
-  res.status(404).json({ message: "❌ Route not found" });
+  res.status(404).json({ message: "Route not found" });
 });
 
 app.use((err, req, res, next) => {
@@ -59,17 +59,19 @@ const io = new Server(server, {
   },
 });
 
-// ✅ GLOBAL STATE
 let onlineUsers = [];
-let lastSeen = {};
 
 io.on("connection", (socket) => {
-  console.log(" User connected:", socket.id);
+  console.log("⚡ New socket connected:", socket.id);
 
-  // ✅ Setup user
+  // ================= SETUP =================
   socket.on("setup", (userId) => {
+    if (!userId) return;
+
     socket.userId = userId;
-    socket.join(userId);
+    socket.join(userId); // personal room (for online status etc.)
+
+    console.log("✅ User joined personal room:", userId);
 
     if (!onlineUsers.includes(userId)) {
       onlineUsers.push(userId);
@@ -79,70 +81,69 @@ io.on("connection", (socket) => {
     socket.emit("connected");
   });
 
-  // ✅ Join chat
+  // ================= JOIN CHAT =================
   socket.on("join chat", (chatId) => {
-    socket.join(chatId);
-    console.log(" Joined chat:", chatId);
+    if (!chatId) return;
+
+    socket.join(chatId.toString());
+    console.log("💬 Joined chat room:", chatId);
   });
 
-  // ================= MESSAGE FLOW =================
-
-  // ✅ New Message
+  // ================= NEW MESSAGE =================
   socket.on("new message", (newMessage) => {
-    const chat = newMessage.chat;
+    try {
+      const chat = newMessage.chat;
 
-    if (!chat.users) return;
+      if (!chat || !chat._id) {
+        console.log("❌ Invalid message: missing chat or chat._id");
+        return;
+      }
 
-    chat.users.forEach((user) => {
-      // ❌ don't send to sender
-      if (user._id === newMessage.sender._id) return;
+      console.log("📤 NEW MESSAGE:", newMessage.content);
 
-      // 📩 send message
-      socket.to(user._id).emit("message received", newMessage);
+      // ✅ FIX: Emit to the CHAT ROOM, not to personal user rooms.
+      // socket.to(...) excludes the sender automatically.
+      socket.to(chat._id.toString()).emit("message received", newMessage);
 
-      // ✅ delivered ack to sender
-      socket
-        .to(newMessage.sender._id)
-        .emit("message delivered", newMessage._id);
-    });
+      console.log("📩 Emitted to chat room:", chat._id);
+    } catch (err) {
+      console.log("❌ SOCKET ERROR:", err.message);
+    }
   });
 
-  // ✅ Seen messages
+  // ================= TYPING =================
+  socket.on("typing", (chatId) => {
+    if (!chatId) return;
+    socket.to(chatId.toString()).emit("typing");
+  });
+
+  socket.on("stop typing", (chatId) => {
+    if (!chatId) return;
+    socket.to(chatId.toString()).emit("stop typing");
+  });
+
+  // ================= SEEN =================
   socket.on("message seen", async (chatId) => {
     try {
       const messages = await Message.find({ chat: chatId });
 
       messages.forEach((msg) => {
-        socket
-          .to(msg.sender.toString())
-          .emit("message seen", msg._id);
+        socket.to(msg.sender.toString()).emit("message seen", msg._id);
       });
+
+      console.log("👀 Seen updated for chat:", chatId);
     } catch (error) {
       console.log("Seen error:", error.message);
     }
   });
 
-  // ================= TYPING =================
-
-  socket.on("typing", (chatId) => {
-    socket.to(chatId).emit("typing");
-  });
-
-  socket.on("stop typing", (chatId) => {
-    socket.to(chatId).emit("stop typing");
-  });
-
   // ================= DISCONNECT =================
-
   socket.on("disconnect", () => {
-    console.log(" User disconnected:", socket.id);
+    console.log("❌ Disconnected:", socket.id);
 
     if (socket.userId) {
       onlineUsers = onlineUsers.filter((id) => id !== socket.userId);
-      lastSeen[socket.userId] = new Date();
-
       io.emit("online users", onlineUsers);
-      io.emit("last seen", lastSeen);
     }
   });
 });
