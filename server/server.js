@@ -13,30 +13,27 @@ import chatRoutes from "./routes/chatRoutes.js";
 import messageRoutes from "./routes/messageRoutes.js";
 
 import Message from "./models/messageModel.js";
+import User from "./models/userModel.js";
 
 dotenv.config();
-
-// Connect DB
 connectDB();
 
 const app = express();
 
-// Middlewares
 app.use(cors());
 app.use(express.json());
 
-// Health check
 app.get("/", (req, res) => {
   res.send("Chat App Backend Running...");
 });
 
-// ================= ROUTES =================
+// ROUTES
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/message", messageRoutes);
 
-// ================= ERRORS =================
+// ERRORS
 app.use((req, res) => {
   res.status(404).json({ message: "Route not found" });
 });
@@ -48,37 +45,33 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ================= SERVER =================
+// SERVER
 const PORT = process.env.PORT || 5000;
 const server = http.createServer(app);
 
-// ================= SOCKET =================
+// SOCKET
 const io = new Server(server, {
-  cors: {
-    origin: "*",
-  },
+  cors: { origin: "*" },
 });
 
-let onlineUsers = [];
+let onlineUsers = new Set();
 
 io.on("connection", (socket) => {
-  console.log("⚡ New socket connected:", socket.id);
+  console.log("⚡ Connected:", socket.id);
 
   // ================= SETUP =================
   socket.on("setup", (userId) => {
     if (!userId) return;
 
     socket.userId = userId;
-    socket.join(userId); // personal room (for online status etc.)
+    socket.join(userId.toString());
 
-    console.log("✅ User joined personal room:", userId);
+    onlineUsers.add(userId.toString());
 
-    if (!onlineUsers.includes(userId)) {
-      onlineUsers.push(userId);
-    }
-
-    io.emit("online users", onlineUsers);
+    io.emit("online users", Array.from(onlineUsers));
     socket.emit("connected");
+
+    console.log("✅ Setup:", userId);
   });
 
   // ================= JOIN CHAT =================
@@ -86,69 +79,109 @@ io.on("connection", (socket) => {
     if (!chatId) return;
 
     socket.join(chatId.toString());
-    console.log("💬 Joined chat room:", chatId);
+    console.log("📦 Joined chat:", chatId);
+  });
+
+  // ================= LEAVE CHAT (NEW) =================
+  socket.on("leave chat", (chatId) => {
+    if (!chatId) return;
+
+    socket.leave(chatId.toString());
+    console.log("🚪 Left chat:", chatId);
   });
 
   // ================= NEW MESSAGE =================
-  socket.on("new message", (newMessage) => {
+  socket.on("new message", (newMessage, callback) => {
     try {
-      const chat = newMessage.chat;
+      const chat = newMessage?.chat;
 
       if (!chat || !chat._id) {
-        console.log("❌ Invalid message: missing chat or chat._id");
+        console.log("❌ Invalid message payload");
         return;
       }
 
-      console.log("📤 NEW MESSAGE:", newMessage.content);
+      socket
+        .to(chat._id.toString())
+        .emit("message received", newMessage);
 
-      // ✅ FIX: Emit to the CHAT ROOM, not to personal user rooms.
-      // socket.to(...) excludes the sender automatically.
-      socket.to(chat._id.toString()).emit("message received", newMessage);
+      // ✅ ACK (delivery confirmation)
+      if (callback) callback({ status: "delivered" });
 
-      console.log("📩 Emitted to chat room:", chat._id);
     } catch (err) {
-      console.log("❌ SOCKET ERROR:", err.message);
+      console.log("❌ Message error:", err.message);
     }
+  });
+
+  // ================= DELETE MESSAGE =================
+  socket.on("delete message", ({ messageId, chatId }) => {
+    if (!messageId || !chatId) return;
+
+    socket
+      .to(chatId.toString())
+      .emit("message deleted", { messageId });
+
+    console.log("🗑 Message deleted:", messageId);
   });
 
   // ================= TYPING =================
   socket.on("typing", (chatId) => {
     if (!chatId) return;
+
     socket.to(chatId.toString()).emit("typing");
   });
 
   socket.on("stop typing", (chatId) => {
     if (!chatId) return;
+
     socket.to(chatId.toString()).emit("stop typing");
   });
 
   // ================= SEEN =================
-  socket.on("message seen", async (chatId) => {
+  socket.on("message seen", async ({ chatId, userId }) => {
     try {
-      const messages = await Message.find({ chat: chatId });
+      if (!chatId || !userId) return;
 
-      messages.forEach((msg) => {
-        socket.to(msg.sender.toString()).emit("message seen", msg._id);
-      });
+      await Message.updateMany(
+        {
+          chat: chatId,
+          seenBy: { $ne: userId },
+        },
+        {
+          $addToSet: { seenBy: userId },
+        }
+      );
 
-      console.log("👀 Seen updated for chat:", chatId);
-    } catch (error) {
-      console.log("Seen error:", error.message);
+      socket
+        .to(chatId.toString())
+        .emit("message seen", { chatId, userId });
+
+      console.log("👀 Seen:", chatId);
+    } catch (err) {
+      console.log("Seen error:", err.message);
     }
   });
 
   // ================= DISCONNECT =================
-  socket.on("disconnect", () => {
+  socket.on("disconnect", async () => {
     console.log("❌ Disconnected:", socket.id);
 
-    if (socket.userId) {
-      onlineUsers = onlineUsers.filter((id) => id !== socket.userId);
-      io.emit("online users", onlineUsers);
+    try {
+      if (socket.userId) {
+        onlineUsers.delete(socket.userId.toString());
+
+        await User.findByIdAndUpdate(socket.userId, {
+          lastSeen: new Date(),
+        });
+
+        io.emit("online users", Array.from(onlineUsers));
+      }
+    } catch (err) {
+      console.log("Disconnect error:", err.message);
     }
   });
 });
 
-// ================= START =================
+// START
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
